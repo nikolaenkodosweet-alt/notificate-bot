@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 OWNER_ID  = int(os.getenv("OWNER_ID", "0"))
 SISTER_ID = int(os.getenv("SISTER_ID", "0"))
-CONFIG_FILE = Path("config.json")
+
+# DATA_DIR указывает на Railway Volume (постоянный диск).
+# На Railway: переменная DATA_DIR = /data  +  Volume смонтирован в /data
+# Локально: просто текущая папка
+DATA_DIR = Path(os.getenv("DATA_DIR", "."))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = DATA_DIR / "config.json"
 
 # ─────────────────────────────────────────────
 #  Default config
@@ -42,7 +48,7 @@ DEFAULT_CONFIG = {
         },
         "water": {
             "name": "Вода 💧",
-            "deadline_day": 20,
+            "deadline_day": 24,
             "done": False,
             "last_month": None,
         },
@@ -50,9 +56,9 @@ DEFAULT_CONFIG = {
     # За сколько дней → в какие часы напоминать (для каждого счётчика своё)
     # Общее расписание — применяется если у счётчика нет своего
     "default_schedule": {
-        "5": ["21:00"],
-        "2": ["19:00", "22:00"],
-        "0": ["11:00", "16:00", "20:00", "22:00"],
+        "5": ["09:00"],
+        "2": ["09:00", "20:00"],
+        "0": ["09:00", "13:00", "17:00", "20:00"],
     },
     "sister": {
         "chat_id": SISTER_ID,
@@ -89,14 +95,24 @@ def current_month() -> str:
     return datetime.now().strftime("%Y-%m")
 
 def reset_if_new_month():
+    """
+    Сбрасывает done только если last_month отличается от текущего.
+    - done=True + last_month="2025-06" → в июне НЕ сбрасываем (уже отправлено)
+    - done=True + last_month="2025-05" → сбрасываем (новый месяц)
+    - done=False + любой last_month → ничего не меняем (и так False)
+    Вызывается при каждом напоминании и при /status — безопасно вызывать многократно.
+    """
     month = current_month()
     changed = False
     for c in cfg["counters"].values():
-        if c.get("last_month") != month:
+        if c.get("done") and c.get("last_month") != month:
+            # Новый месяц — сбрасываем
             c["done"] = False
+            c["last_month"] = None
             changed = True
     if changed:
         save_config(cfg)
+        logger.info("Monthly reset: counters cleared for new month.")
 
 def mark_done(key: str):
     cfg["counters"][key]["done"] = True
@@ -139,6 +155,42 @@ def counters_list_keyboard(action: str) -> InlineKeyboardMarkup:
 # ─────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="Europe/Kiev")
 
+def get_due_soon(days_threshold: int = 5) -> dict:
+    """
+    Возвращает счётчики у которых дедлайн через <= days_threshold дней
+    или уже просрочен, и done=False.
+    """
+    today = datetime.now().day
+    result = {}
+    for key, c in cfg["counters"].items():
+        if c["done"]:
+            continue
+        days_left = c["deadline_day"] - today
+        if days_left <= days_threshold:
+            result[key] = c
+    return result
+
+async def notify_sister(bot, keys: list[str]):
+    """Отправляет сестре сообщение только по указанным счётчикам."""
+    sister_id = cfg["sister"].get("chat_id", 0)
+    if not sister_id or not keys:
+        return
+    names = ", ".join(cfg["counters"][k]["name"] for k in keys if k in cfg["counters"])
+    try:
+        await bot.send_message(
+            chat_id=sister_id,
+            text=(
+                f"Васап! 👋\n\n"
+                f"Пришли, пожалуйста, *фото показаний*:\n"
+                f"*{names}*\n\n"
+                f"Я ТЕБЯ ОЧЕНЬ ЛЮБЛЮ!!!"
+            ),
+            parse_mode="Markdown"
+        )
+        logger.info(f"Sister notified for: {keys}")
+    except Exception as e:
+        logger.warning(f"Could not notify sister: {e}")
+
 async def send_reminder(app: Application, counter_key: str):
     reset_if_new_month()
     c = cfg["counters"].get(counter_key)
@@ -161,7 +213,16 @@ async def send_reminder(app: Application, counter_key: str):
         f"{urgency}\n\n"
         f"Нажми когда отправишь 👇"
     )
-    buttons = [[InlineKeyboardButton(f"✅ {c['name']} — отправил", callback_data=f"done_{counter_key}")]]
+    buttons = [
+        [InlineKeyboardButton(f"✅ {c['name']} — отправил", callback_data=f"done_{counter_key}")],
+    ]
+    # Кнопка «напомнить сестре» — только если сестра настроена
+    if cfg["sister"].get("chat_id", 0):
+        buttons.append([InlineKeyboardButton(
+            f"📨 Напомнить сестре про {c['name']}",
+            callback_data=f"ping_sister_{counter_key}"
+        )])
+
     await app.bot.send_message(
         chat_id=OWNER_ID,
         text=text,
@@ -420,26 +481,30 @@ async def cmd_sister(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    pending = {k: c for k, c in cfg["counters"].items() if not c["done"]}
-    if not pending:
-        await update.message.reply_text("✅ Все показания уже отправлены!")
+    # Только счётчики у которых дедлайн в ближайшие 5 дней или просрочен
+    due = get_due_soon(days_threshold=5)
+    if not due:
+        # Проверим есть ли вообще незакрытые
+        all_pending = {k: c for k, c in cfg["counters"].items() if not c["done"]}
+        if not all_pending:
+            await update.message.reply_text("✅ Все показания уже отправлены!")
+        else:
+            names_later = ", ".join(c["name"] for c in all_pending.values())
+            await update.message.reply_text(
+                f"⏳ Ещё рано — до дедлайна больше 5 дней.\n\n"
+                f"Счётчики: *{names_later}*\n\n"
+                f"Хочешь написать сестре прямо сейчас?",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📨 Написать всё равно", callback_data="sister_force_all")
+                ]])
+            )
         return
 
-    names = ", ".join(c["name"] for c in pending.values())
+    names = ", ".join(c["name"] for c in due.values())
     try:
-        await ctx.bot.send_message(
-            chat_id=sister_id,
-            text=(
-                f"Привет! 👋\n\n"
-                f"Пришли, пожалуйста, *фото показаний*:\n"
-                f"*{names}*\n\n"
-                f"Просто отправь фотографии сюда — они придут мне автоматически 📸"
-            ),
-            parse_mode="Markdown"
-        )
-        await update.message.reply_text(
-            f"✅ Написал сестре насчёт: {names}"
-        )
+        await notify_sister(ctx.bot, list(due.keys()))
+        await update.message.reply_text(f"✅ Написал сестре насчёт: *{names}*", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
@@ -544,6 +609,28 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"📅 *{name}*\n\nВведи новый дедлайн (число месяца, 1–28):",
                 parse_mode="Markdown"
             )
+
+    # ── Кнопка «напомнить сестре» из напоминания (только этот счётчик) ──
+    elif data.startswith("ping_sister_") and uid == OWNER_ID:
+        key = data[len("ping_sister_"):]
+        if key in cfg["counters"]:
+            await notify_sister(ctx.bot, [key])
+            name = cfg["counters"][key]["name"]
+            await query.answer(f"📨 Написал сестре про {name}!", show_alert=False)
+            # Убираем кнопку после нажатия чтобы не спамить
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"✅ {name} — отправил", callback_data=f"done_{key}"),
+            ]]))
+
+    # ── Написать сестре насчёт всех (даже если рано) ──
+    elif data == "sister_force_all" and uid == OWNER_ID:
+        all_pending = [k for k, c in cfg["counters"].items() if not c["done"]]
+        if all_pending:
+            await notify_sister(ctx.bot, all_pending)
+            names = ", ".join(cfg["counters"][k]["name"] for k in all_pending)
+            await query.edit_message_text(f"✅ Написал сестре насчёт: *{names}*", parse_mode="Markdown")
+        else:
+            await query.edit_message_text("✅ Все показания уже отправлены!")
 
     # ── Отмена ──
     elif data == "cancel":
