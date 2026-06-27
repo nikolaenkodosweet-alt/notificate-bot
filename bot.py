@@ -206,20 +206,6 @@ def get_due_soon(days_threshold: int = 5) -> dict:
 # ─────────────────────────────────────────────
 #  Helpers — любовные сообщения
 # ─────────────────────────────────────────────
-def days_since_start() -> int | None:
-    start = cfg["love"].get("start_date")
-    if not start:
-        return None
-    try:
-        d0 = date.fromisoformat(start)
-        return (date.today() - d0).days + 1
-    except ValueError:
-        return None
-
-def today_holiday() -> tuple[str, str] | None:
-    key = datetime.now(TZ).strftime("%m-%d")
-    return HOLIDAYS.get(key)
-
 async def generate_love_message(day_num: int, bot) -> str:
     """Генерирует сообщение через Groq API или берёт из пула."""
     holiday = today_holiday()
@@ -227,15 +213,16 @@ async def generate_love_message(day_num: int, bot) -> str:
         title, body = holiday
         return f"{title}\n\nЭто уже *{day_num}* день вместе 🥰\n\n{body}"
 
-    # Обновленный промпт с дерзким чёрным юмором
+    # Обновленный промпт по твоим новым правилам
     system_prompt = (
-        "Ты — старший брат, который пишет младшей сестре дерзкие сообщения с чёрным юмором. "
-        "Стиль: сарказм, подколы, самоирония, но с любовью в конце.\n\n"
-        "Обязательно:\n"
-        "- Ярко обыгрывай номер дня (сегодня уже N-й день).\n"
-        "- Добавляй чёрный юмор про терпение, убийство, выживание и т.д.\n"
-        "- В конце сообщения обязательно добавляй 3–5 эмодзи в естественных местах.\n"
-        "- 3–4 предложения.\n"
+        "Ты — старший брат. Пиши сестре короткие дерзкие сообщения с чёрным юмором. "
+        "Требования:\n"
+        "- Максимум 3 предложения.\n"
+        "- Обязательно ярко обыгрывай номер дня (сегодня уже N-й день) в начале.\n"
+        "- Чёрный юмор: про терпение, убийство, выживание, безумие.\n"
+        "- Эмодзи должны быть разбросаны по тексту, а не только в конце.\n"
+        "- Никакой лишней сладости.\n"
+        "- Разговорный стиль, сарказм, подколы.\n"
         "- Только чистый текст сообщения."
     )
 
@@ -264,13 +251,13 @@ async def generate_love_message(day_num: int, bot) -> str:
         data = resp.json()
         text = data["choices"][0]["message"]["content"].strip()
         
-        if text and len(text) > 20:  # минимальная защита от пустого ответа
+        if text and len(text) > 10:
             return text
 
     except Exception as e:
         logger.warning(f"Groq API error: {e}")
 
-    # Fallback — пул сообщений
+    # Fallback на случай ошибки API
     idx = cfg["love"]["msg_index"] % len(DAILY_MESSAGES_POOL)
     msg = DAILY_MESSAGES_POOL[idx]
     cfg["love"]["msg_index"] = idx + 1
