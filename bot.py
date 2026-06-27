@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime, date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -34,6 +35,8 @@ DATA_DIR    = Path(os.getenv("DATA_DIR", "."))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 
+# Жестко задаем часовой пояс для всех расчетов
+TZ = ZoneInfo("Europe/Kiev")
 # ─────────────────────────────────────────────
 #  Праздники (MM-DD формат)
 # ─────────────────────────────────────────────
@@ -142,7 +145,7 @@ cfg = load_config()
 #  Helpers — счётчики
 # ─────────────────────────────────────────────
 def current_month() -> str:
-    return datetime.now().strftime("%Y-%m")
+    return datetime.now(TZ).strftime("%Y-%m")
 
 def reset_if_new_month():
     month = current_month()
@@ -163,7 +166,7 @@ def mark_done(key: str):
 
 def status_text() -> str:
     reset_if_new_month()
-    month = datetime.now().strftime("%m.%Y")
+    month = datetime.now(TZ).strftime("%m.%Y")
     lines = [f"📊 *Счётчики — {month}*\n"]
     for key, c in cfg["counters"].items():
         icon = "✅" if c["done"] else "❌"
@@ -190,7 +193,7 @@ def counters_list_keyboard(action: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 def get_due_soon(days_threshold: int = 5) -> dict:
-    today = datetime.now().day
+    today = datetime.now(TZ).day
     result = {}
     for key, c in cfg["counters"].items():
         if c["done"]:
@@ -213,7 +216,7 @@ def days_since_start() -> int | None:
         return None
 
 def today_holiday() -> tuple[str, str] | None:
-    key = datetime.now().strftime("%m-%d")
+    key = datetime.now(TZ).strftime("%m-%d")
     return HOLIDAYS.get(key)
 
 async def generate_love_message(day_num: int, bot) -> str:
@@ -277,7 +280,7 @@ async def generate_love_message(day_num: int, bot) -> str:
 # ─────────────────────────────────────────────
 #  Scheduler
 # ─────────────────────────────────────────────
-scheduler = AsyncIOScheduler(timezone="Europe/Kiev")
+scheduler = AsyncIOScheduler(timezone=TZ)
 
 async def notify_sister(bot, keys: list[str]):
     sister_id = cfg["sister"].get("chat_id", 0)
@@ -305,7 +308,7 @@ async def send_reminder(app: Application, counter_key: str):
     if not c or c["done"]:
         return
 
-    today = datetime.now().day
+    today = datetime.now(TZ).day
     deadline = c["deadline_day"]
     days_left = deadline - today
 
@@ -840,12 +843,16 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("✅ Все показания уже отправлены!")
 
     elif data.startswith("copy_love_") and uid == OWNER_ID:
-        # Показываем текст в alert — удобно выделить и скопировать
+        # Отправляем текст отдельным сообщением с моноширинным шрифтом
         last_text = cfg.get("love", {}).get("last_text", "")
-        # Убираем markdown разметку для чистого текста
+        # Убираем старую разметку, чтобы она не сломала моноширинный блок
         clean = re.sub(r"[*_`]", "", last_text)
-        await query.answer(clean[:200], show_alert=True)
-
+        
+        await ctx.bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"Нажми на текст ниже, чтобы скопировать:\n\n`{clean}`",
+            parse_mode="Markdown"
+        )
     elif data == "cancel":
         await query.edit_message_text("❌ Отменено.")
 
