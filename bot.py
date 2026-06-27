@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, date
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -24,51 +25,97 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 #  Env
 # ─────────────────────────────────────────────
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-OWNER_ID  = int(os.getenv("OWNER_ID", "0"))
-SISTER_ID = int(os.getenv("SISTER_ID", "0"))
+BOT_TOKEN     = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
+OWNER_ID      = int(os.getenv("OWNER_ID", "0"))
+SISTER_ID     = int(os.getenv("SISTER_ID", "0"))
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# DATA_DIR указывает на Railway Volume (постоянный диск).
-# На Railway: переменная DATA_DIR = /data  +  Volume смонтирован в /data
-# Локально: просто текущая папка
-DATA_DIR = Path(os.getenv("DATA_DIR", "."))
+DATA_DIR    = Path(os.getenv("DATA_DIR", "."))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
+
+# ─────────────────────────────────────────────
+#  Праздники (MM-DD формат)
+# ─────────────────────────────────────────────
+HOLIDAYS = {
+    "01-01": ("🎄 С Новым годом!", "Пусть этот год принесёт тебе только радость, любовь и незабываемые моменты. Ты лучшая! 🥂✨"),
+    "01-07": ("🎄 С Рождеством Христовым!", "Пусть Рождество наполнит твой дом теплом, а сердце — любовью. Ты — моё лучшее чудо! 🌟"),
+    "02-14": ("💝 С Днём святого Валентина!", "Ты — моя самая большая любовь. Каждый день с тобой — как первый день влюблённости. Спасибо, что ты есть! 💕"),
+    "03-08": ("🌸 С 8 Марта!", "Сегодня твой день, моя лучшая девочка. Ты — цветок, который украшает мою жизнь каждый день. Люблю тебя безгранично! 🌹"),
+    "04-01": ("😄 С Днём смеха!", "Ты сама по себе — лучшая шутка судьбы, которую она с нами сыграла. Только это шутка со счастливым концом! 😂💛"),
+    "05-01": ("🌿 С Первомаем!", "Пусть весна принесёт нам новые мечты и яркие моменты вместе. Ты — моя весна каждый день! 🌼"),
+    "06-01": ("👶 С Днём защиты детей!", "В тебе есть что-то по-детски чистое и искреннее — и именно за это я тебя обожаю! 🌈"),
+    "08-24": ("🇺🇦 С Днём независимости Украины!", "Горжусь тобой и нашей страной. Ты — моё личное независимое государство счастья! 💛💙"),
+    "09-01": ("📚 С началом сентября!", "Новый сезон, новые возможности — и ты рядом. Это уже делает любой день идеальным! 🍂"),
+    "10-31": ("🎃 Хэллоуин!", "Ты — самое страшное, что со мной случилось, потому что я не могу без тебя жить! 👻😈"),
+    "12-19": ("🎅 С Днём Николая!", "Святой Николай приносит подарки только хорошим людям. Тебе — целый мешок, потому что ты лучшая! 🎁"),
+    "12-25": ("🎄 С Рождеством!", "Пусть этот праздник принесёт мир, любовь и уют. Ты — лучший подарок в моей жизни! ⭐"),
+    "12-31": ("🎆 С Новым годом, любимая!", "Год заканчивается, но моя любовь к тебе только растёт. С нетерпением жду нового года — вместе с тобой! 🥂💫"),
+}
+
+# Пул ежедневных сообщений
+DAILY_MESSAGES_POOL = [
+    "Ты — моё лучшее открытие в этом мире. Каждый день рядом с тобой — подарок, который я не заслужил, но берегу всем сердцем. 💛",
+    "Знаешь, есть вещи, которые со временем становятся привычными. Но моя любовь к тебе — никогда. Она каждый день становится сильнее. ❤️",
+    "Ты смеёшься — и день становится лучше. Ты рядом — и всё остальное не имеет значения. Просто спасибо, что ты есть. 🌸",
+    "Я думаю о тебе даже когда пытаюсь думать о чём-то другом. Кажется, ты занимаешь всю оперативную память моего сердца. 💭💕",
+    "Ты — тот тип человека, с которым хочется делиться всем: смешными мемами, тишиной, ужином и всей своей жизнью. 🍽️✨",
+    "Каждое утро я благодарен за то, что ты есть. Ты — лучшая причина просыпаться с улыбкой. ☀️",
+    "Ты делаешь моё обычное — особенным. Обычный вторник, обычная прогулка, обычный кофе — всё становится другим, когда ты рядом. ☕💛",
+    "Если бы меня попросили описать счастье одним словом — я бы назвал твоё имя. 🌟",
+    "Ты удивительная. Не потому что идеальная, а потому что настоящая. И это намного лучше. 💫",
+    "С каждым днём я нахожу в тебе что-то новое, что заставляет меня влюбляться снова и снова. 🔄❤️",
+    "Ты знаешь, как меня успокоить, рассмешить и вдохновить одновременно. Это редкий талант. 🎭",
+    "Моё сердце давно решило — ты та самая. И каждый день только подтверждает это решение. 💍",
+    "Даже в самые обычные дни ты делаешь что-то необычное — просто существуешь рядом со мной. 🌿",
+    "Я благодарен судьбе за тысячи маленьких случайностей, которые привели меня к тебе. 🎲💛",
+    "Ты — лучшая часть всех моих воспоминаний и всех моих планов. Прошлое и будущее — везде ты. ⏳❤️",
+    "Любить тебя — самая естественная вещь в моей жизни. Как дышать. Только намного приятнее. 💨💕",
+    "Ты смеёшься над моими шутками даже когда они несмешные. Вот это и есть настоящая любовь. 😄",
+    "Каждая минута с тобой — маленькая победа над однообразием. Ты мой личный антидот от серости. 🌈",
+    "Ты — человек, с которым я хочу делиться и тихими вечерами, и громкими радостями. Всем. 🌙☀️",
+    "Спасибо, что ты именно такая. Не меняйся. Ну, разве что к лучшему — но ты уже и так идеальная. 💎",
+    "Рядом с тобой даже понедельник кажется неплохим днём. А это вообще-то очень серьёзно. 📅💛",
+    "Ты — мой любимый человек на этой планете. И на других тоже, если бы они были. 🪐❤️",
+    "Твоя улыбка — лучшая вещь, которую я видел сегодня. И вчера. И завтра тоже будет она. 😊",
+    "Я могу назвать тысячу причин почему люблю тебя. Но самая главная — просто ты. 💛",
+    "Ты — мой дом. Не место, а человек. С тобой я дома везде. 🏠❤️",
+    "Каждое «спокойной ночи» от тебя — лучшая точка в конце дня. 🌙✨",
+    "Ты умеешь слушать так, что хочется рассказать всё. И молчать так, что слова становятся лишними. 💬🤍",
+    "Если есть что-то лучше тебя — я ещё не нашёл. И не ищу. 🔍❤️",
+    "С тобой даже дождливый день — романтичный. Ты превращаешь серое в тёплое. 🌧️🧡",
+    "Ты — человек, которого я выбираю каждый день. Снова и снова. Без колебаний. 💪💕",
+]
+
+# ─────────────────────────────────────────────
+#  ConversationHandler states
+# ─────────────────────────────────────────────
+(WAITING_COUNTER_NAME, WAITING_COUNTER_DEADLINE,
+ WAITING_DELETE_CONFIRM, WAITING_NEW_DEADLINE,
+ WAITING_LOVE_DATE, WAITING_LOVE_TIME) = range(6)
 
 # ─────────────────────────────────────────────
 #  Default config
 # ─────────────────────────────────────────────
 DEFAULT_CONFIG = {
     "counters": {
-        "light": {
-            "name": "Свет 💡",
-            "deadline_day": 30,
-            "done": False,
-            "last_month": None,
-        },
-        "water": {
-            "name": "Вода 💧",
-            "deadline_day": 24,
-            "done": False,
-            "last_month": None,
-        },
+        "light": {"name": "Свет 💡", "deadline_day": 30, "done": False, "last_month": None},
+        "water": {"name": "Вода 💧", "deadline_day": 20, "done": False, "last_month": None},
     },
-    # За сколько дней → в какие часы напоминать (для каждого счётчика своё)
-    # Общее расписание — применяется если у счётчика нет своего
     "default_schedule": {
         "5": ["09:00"],
         "2": ["09:00", "20:00"],
         "0": ["09:00", "13:00", "17:00", "20:00"],
     },
-    "sister": {
-        "chat_id": SISTER_ID,
+    "sister": {"chat_id": SISTER_ID},
+    # Модуль ежедневных любовных сообщений
+    "love": {
+        "enabled": False,
+        "start_date": None,      # "YYYY-MM-DD"
+        "send_time": "09:00",    # когда отправлять
+        "msg_index": 0,          # какое сообщение из пула следующее
     },
 }
-
-# ConversationHandler states
-WAITING_COUNTER_NAME, WAITING_COUNTER_DEADLINE = range(2)
-WAITING_DELETE_CONFIRM = 2
-WAITING_NEW_DEADLINE = 3
 
 # ─────────────────────────────────────────────
 #  Config helpers
@@ -79,6 +126,9 @@ def load_config() -> dict:
             cfg = json.load(f)
         for k, v in DEFAULT_CONFIG.items():
             cfg.setdefault(k, v)
+        # Merge nested love defaults
+        for k, v in DEFAULT_CONFIG["love"].items():
+            cfg["love"].setdefault(k, v)
         return cfg
     return json.loads(json.dumps(DEFAULT_CONFIG))
 
@@ -89,30 +139,23 @@ def save_config(cfg: dict):
 cfg = load_config()
 
 # ─────────────────────────────────────────────
-#  Helpers
+#  Helpers — счётчики
 # ─────────────────────────────────────────────
 def current_month() -> str:
     return datetime.now().strftime("%Y-%m")
 
 def reset_if_new_month():
-    """
-    Сбрасывает done только если last_month отличается от текущего.
-    - done=True + last_month="2025-06" → в июне НЕ сбрасываем (уже отправлено)
-    - done=True + last_month="2025-05" → сбрасываем (новый месяц)
-    - done=False + любой last_month → ничего не меняем (и так False)
-    Вызывается при каждом напоминании и при /status — безопасно вызывать многократно.
-    """
     month = current_month()
     changed = False
     for c in cfg["counters"].values():
         if c.get("done") and c.get("last_month") != month:
-            # Новый месяц — сбрасываем
             c["done"] = False
             c["last_month"] = None
+            c["sister_notified"] = False
             changed = True
     if changed:
         save_config(cfg)
-        logger.info("Monthly reset: counters cleared for new month.")
+        logger.info("Monthly reset done.")
 
 def mark_done(key: str):
     cfg["counters"][key]["done"] = True
@@ -133,45 +176,103 @@ def main_keyboard() -> InlineKeyboardMarkup:
     for key, c in cfg["counters"].items():
         if not c["done"]:
             buttons.append([InlineKeyboardButton(
-                f"✅ {c['name']} — отправил",
-                callback_data=f"done_{key}"
+                f"✅ {c['name']} — отправил", callback_data=f"done_{key}"
             )])
     buttons.append([InlineKeyboardButton("📋 Обновить статус", callback_data="status")])
     return InlineKeyboardMarkup(buttons)
 
 def counters_list_keyboard(action: str) -> InlineKeyboardMarkup:
-    """Список счётчиков для выбора действия (удалить / изменить дедлайн)."""
     buttons = []
     for key, c in cfg["counters"].items():
         buttons.append([InlineKeyboardButton(
-            f"{c['name']} (дедлайн {c['deadline_day']}-е)",
-            callback_data=f"{action}_{key}"
+            f"{c['name']} (дедлайн {c['deadline_day']}-е)", callback_data=f"{action}_{key}"
         )])
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(buttons)
+
+def get_due_soon(days_threshold: int = 5) -> dict:
+    today = datetime.now().day
+    result = {}
+    for key, c in cfg["counters"].items():
+        if c["done"]:
+            continue
+        if c["deadline_day"] - today <= days_threshold:
+            result[key] = c
+    return result
+
+# ─────────────────────────────────────────────
+#  Helpers — любовные сообщения
+# ─────────────────────────────────────────────
+def days_since_start() -> int | None:
+    start = cfg["love"].get("start_date")
+    if not start:
+        return None
+    try:
+        d0 = date.fromisoformat(start)
+        return (date.today() - d0).days + 1
+    except ValueError:
+        return None
+
+def today_holiday() -> tuple[str, str] | None:
+    key = datetime.now().strftime("%m-%d")
+    return HOLIDAYS.get(key)
+
+async def generate_love_message(day_num: int, bot) -> str:
+    """Генерирует сообщение через Claude API или берёт из пула."""
+    holiday = today_holiday()
+
+    # Если сегодня праздник — используем праздничное
+    if holiday:
+        title, body = holiday
+        return f"{title}\n\nЭто уже *{day_num}* день вместе 🥰\n\n{body}"
+
+    # Пробуем Claude API
+    if ANTHROPIC_KEY:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": ANTHROPIC_KEY,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": "claude-haiku-4-5-20251001",
+                        "max_tokens": 300,
+                        "messages": [{
+                            "role": "user",
+                            "content": (
+                                f"Напиши красивое романтическое сообщение на русском языке для девушки. "
+                                f"Сегодня {day_num}-й день наших отношений. "
+                                f"Сообщение должно быть тёплым, искренним, с эмодзи, 3-5 предложений. "
+                                f"Упомяни число {day_num} естественно. "
+                                f"Только само сообщение, без кавычек и пояснений."
+                            )
+                        }]
+                    }
+                )
+            data = resp.json()
+            text = data["content"][0]["text"].strip()
+            if text:
+                return text
+        except Exception as e:
+            logger.warning(f"Claude API error: {e}")
+
+    # Fallback — пул сообщений
+    idx = cfg["love"]["msg_index"] % len(DAILY_MESSAGES_POOL)
+    msg = DAILY_MESSAGES_POOL[idx]
+    cfg["love"]["msg_index"] = idx + 1
+    save_config(cfg)
+    return f"День *{day_num}* 🌟\n\n{msg}"
 
 # ─────────────────────────────────────────────
 #  Scheduler
 # ─────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="Europe/Kiev")
 
-def get_due_soon(days_threshold: int = 5) -> dict:
-    """
-    Возвращает счётчики у которых дедлайн через <= days_threshold дней
-    или уже просрочен, и done=False.
-    """
-    today = datetime.now().day
-    result = {}
-    for key, c in cfg["counters"].items():
-        if c["done"]:
-            continue
-        days_left = c["deadline_day"] - today
-        if days_left <= days_threshold:
-            result[key] = c
-    return result
-
 async def notify_sister(bot, keys: list[str]):
-    """Отправляет сестре сообщение только по указанным счётчикам."""
     sister_id = cfg["sister"].get("chat_id", 0)
     if not sister_id or not keys:
         return
@@ -180,16 +281,16 @@ async def notify_sister(bot, keys: list[str]):
         await bot.send_message(
             chat_id=sister_id,
             text=(
-                f"Васап! 👋\n\n"
+                f"Привет! 👋\n\n"
                 f"Пришли, пожалуйста, *фото показаний*:\n"
                 f"*{names}*\n\n"
-                f"Я ТЕБЯ ОЧЕНЬ ЛЮБЛЮ!!!"
+                f"Просто отправь фото сюда — они придут автоматически 📸"
             ),
             parse_mode="Markdown"
         )
-        logger.info(f"Sister notified for: {keys}")
+        logger.info(f"Sister notified: {keys}")
     except Exception as e:
-        logger.warning(f"Could not notify sister: {e}")
+        logger.warning(f"Sister notify error: {e}")
 
 async def send_reminder(app: Application, counter_key: str):
     reset_if_new_month()
@@ -208,15 +309,7 @@ async def send_reminder(app: Application, counter_key: str):
     else:
         urgency = f"🔴 *Просрочено на {abs(days_left)} дн.!*"
 
-    text = (
-        f"📟 Напоминание: *{c['name']}*\n\n"
-        f"{urgency}\n\n"
-        f"Нажми когда отправишь 👇"
-    )
-    buttons = [
-        [InlineKeyboardButton(f"✅ {c['name']} — отправил", callback_data=f"done_{counter_key}")],
-    ]
-    # Кнопка «напомнить сестре» — только если сестра настроена
+    buttons = [[InlineKeyboardButton(f"✅ {c['name']} — отправил", callback_data=f"done_{counter_key}")]]
     if cfg["sister"].get("chat_id", 0):
         buttons.append([InlineKeyboardButton(
             f"📨 Напомнить сестре про {c['name']}",
@@ -225,18 +318,53 @@ async def send_reminder(app: Application, counter_key: str):
 
     await app.bot.send_message(
         chat_id=OWNER_ID,
+        text=f"📟 Напоминание: *{c['name']}*\n\n{urgency}\n\nНажми когда отправишь 👇",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+    # Автоматически пишем сестре ОДИН РАЗ когда осталось ≤5 дней
+    # Флаг sister_notified сбрасывается вместе с done в начале нового месяца
+    if days_left <= 5 and cfg["sister"].get("chat_id", 0):
+        if not c.get("sister_notified"):
+            c["sister_notified"] = True
+            save_config(cfg)
+            await notify_sister(app.bot, [counter_key])
+
+async def send_daily_love(app: Application):
+    """Ежедневное романтическое сообщение."""
+    love = cfg.get("love", {})
+    if not love.get("enabled") or not love.get("start_date"):
+        return
+
+    day_num = days_since_start()
+    if day_num is None or day_num < 1:
+        return
+
+    text = await generate_love_message(day_num, app.bot)
+
+    # Кнопка «скопировать» — показывает текст в alert, чтобы удобно выделить
+    buttons = [[InlineKeyboardButton("📋 Скопировать текст", callback_data=f"copy_love_{day_num}")]]
+
+    await app.bot.send_message(
+        chat_id=OWNER_ID,
         text=text,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
+    # Сохраняем текст для кнопки копирования
+    cfg["love"]["last_text"] = text
+    save_config(cfg)
+
 def rebuild_schedule(app: Application):
     for job in scheduler.get_jobs():
-        if job.id.startswith("rem_"):
+        if job.id.startswith("rem_") or job.id == "daily_love" or job.id == "monthly_reset":
             job.remove()
 
     sched = cfg.get("default_schedule", DEFAULT_CONFIG["default_schedule"])
 
+    # Напоминания о счётчиках
     for key, c in cfg["counters"].items():
         deadline = c["deadline_day"]
         for days_before_str, times in sched.items():
@@ -253,6 +381,19 @@ def rebuild_schedule(app: Application):
                     replace_existing=True,
                 )
 
+    # Ежедневное любовное сообщение
+    love = cfg.get("love", {})
+    if love.get("enabled") and love.get("send_time"):
+        h, m = map(int, love["send_time"].split(":"))
+        scheduler.add_job(
+            send_daily_love,
+            CronTrigger(hour=h, minute=m),
+            args=[app],
+            id="daily_love",
+            replace_existing=True,
+        )
+        logger.info(f"Daily love scheduled at {love['send_time']}")
+
     scheduler.add_job(
         reset_if_new_month,
         CronTrigger(day=1, hour=0, minute=1),
@@ -267,56 +408,49 @@ def rebuild_schedule(app: Application):
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     name = update.effective_user.first_name
-
     if uid != OWNER_ID:
-        # Незнакомый пользователь — показываем chat_id (для сестры и т.д.)
         await update.message.reply_text(
-            f"Привет, {name}! 👋\n\n"
-            f"Твой chat\\_id: `{uid}`\n\n"
-            f"Передай его хозяину бота.",
+            f"Привет, {name}! 👋\n\nТвой chat\\_id: `{uid}`\nПередай его владельцу бота.",
             parse_mode="Markdown"
         )
         return
-
     await update.message.reply_text(
         "👋 *Бот напоминаний*\n\n"
-        "├ /status — статус счётчиков\n"
+        "*Счётчики:*\n"
+        "├ /status — статус\n"
         "├ /add — добавить счётчик\n"
-        "├ /delete — удалить счётчик\n"
+        "├ /delete — удалить\n"
         "├ /deadline — изменить дедлайн\n"
-        "├ /remind — напомнить прямо сейчас\n"
-        "├ /sister — написать сестре\n"
+        "├ /remind — тест напоминания\n"
+        "└ /sister — написать сестре\n\n"
+        "*Любовные сообщения:*\n"
+        "├ /love — настройки\n"
+        "├ /love_test — тест сообщения\n"
+        "└ /love_off — выключить\n\n"
+        "*Прочее:*\n"
         "└ /settings — расписание напоминаний",
         parse_mode="Markdown"
     )
 
 # ─────────────────────────────────────────────
-#  /status
+#  Счётчики — команды
 # ─────────────────────────────────────────────
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
-    await update.message.reply_text(
-        status_text(), parse_mode="Markdown", reply_markup=main_keyboard()
-    )
+    await update.message.reply_text(status_text(), parse_mode="Markdown", reply_markup=main_keyboard())
 
-# ─────────────────────────────────────────────
-#  /remind
-# ─────────────────────────────────────────────
 async def cmd_remind(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     for key in cfg["counters"]:
         await send_reminder(ctx.application, key)
 
-# ─────────────────────────────────────────────
-#  /add — ConversationHandler
-# ─────────────────────────────────────────────
 async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return ConversationHandler.END
     await update.message.reply_text(
-        "➕ *Новый счётчик*\n\nВведи название (например: `Газ 🔥` или `Вода 💧`):",
+        "➕ *Новый счётчик*\n\nВведи название (например: `Газ 🔥`):",
         parse_mode="Markdown"
     )
     return WAITING_COUNTER_NAME
@@ -324,8 +458,7 @@ async def cmd_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def add_get_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["new_counter_name"] = update.message.text.strip()
     await update.message.reply_text(
-        f"📅 Название: *{ctx.user_data['new_counter_name']}*\n\n"
-        f"Введи дедлайн — число месяца (1–28):",
+        f"📅 Название: *{ctx.user_data['new_counter_name']}*\n\nВведи дедлайн (число месяца 1–28):",
         parse_mode="Markdown"
     )
     return WAITING_COUNTER_DEADLINE
@@ -337,51 +470,29 @@ async def add_get_deadline(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except (ValueError, AssertionError):
         await update.message.reply_text("❌ Введи число от 1 до 28:")
         return WAITING_COUNTER_DEADLINE
-
     name = ctx.user_data["new_counter_name"]
-    # Генерируем ключ из имени
-    key = name.lower().replace(" ", "_")
-    key = "".join(c for c in key if c.isalnum() or c == "_")[:20]
-    if not key:
-        key = f"counter_{len(cfg['counters'])+1}"
-
-    cfg["counters"][key] = {
-        "name": name,
-        "deadline_day": day,
-        "done": False,
-        "last_month": None,
-    }
+    key = re.sub(r"[^\w]", "_", name.lower())[:20] or f"c{len(cfg['counters'])+1}"
+    cfg["counters"][key] = {"name": name, "deadline_day": day, "done": False, "last_month": None}
     save_config(cfg)
     rebuild_schedule(ctx.application)
-
-    await update.message.reply_text(
-        f"✅ Добавлен: *{name}* — дедлайн *{day}-е* число.",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"✅ Добавлен: *{name}* — дедлайн *{day}-е*.", parse_mode="Markdown")
     return ConversationHandler.END
 
 async def add_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено.")
     return ConversationHandler.END
 
-# ─────────────────────────────────────────────
-#  /delete
-# ─────────────────────────────────────────────
 async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
     if not cfg["counters"]:
-        await update.message.reply_text("Нет счётчиков для удаления.")
+        await update.message.reply_text("Нет счётчиков.")
         return
     await update.message.reply_text(
-        "🗑 *Какой счётчик удалить?*",
-        parse_mode="Markdown",
+        "🗑 *Какой счётчик удалить?*", parse_mode="Markdown",
         reply_markup=counters_list_keyboard("del")
     )
 
-# ─────────────────────────────────────────────
-#  /deadline
-# ─────────────────────────────────────────────
 async def cmd_deadline(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return ConversationHandler.END
@@ -389,8 +500,7 @@ async def cmd_deadline(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Нет счётчиков.")
         return ConversationHandler.END
     await update.message.reply_text(
-        "📅 *Для какого счётчика изменить дедлайн?*",
-        parse_mode="Markdown",
+        "📅 *Для какого счётчика изменить дедлайн?*", parse_mode="Markdown",
         reply_markup=counters_list_keyboard("setd")
     )
     return WAITING_NEW_DEADLINE
@@ -402,22 +512,16 @@ async def deadline_get_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except (ValueError, AssertionError):
         await update.message.reply_text("❌ Введи число от 1 до 28:")
         return WAITING_NEW_DEADLINE
-
     key = ctx.user_data.get("deadline_key")
     if key and key in cfg["counters"]:
         cfg["counters"][key]["deadline_day"] = day
         save_config(cfg)
         rebuild_schedule(ctx.application)
-        name = cfg["counters"][key]["name"]
         await update.message.reply_text(
-            f"✅ *{name}* — дедлайн изменён на *{day}-е* число.",
-            parse_mode="Markdown"
+            f"✅ *{cfg['counters'][key]['name']}* — дедлайн *{day}-е*.", parse_mode="Markdown"
         )
     return ConversationHandler.END
 
-# ─────────────────────────────────────────────
-#  /settings
-# ─────────────────────────────────────────────
 async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -427,20 +531,19 @@ async def cmd_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         d = int(days)
         label = f"За {d} дн." if d > 0 else "В день дедлайна"
         lines.append(f"• {label}: {', '.join(times)}")
-
-    counters_info = []
-    for c in cfg["counters"].values():
-        counters_info.append(f"• {c['name']} — дедлайн {c['deadline_day']}-е")
-
-    text = (
-        "⚙️ *Настройки*\n\n"
-        "*Счётчики:*\n" + "\n".join(counters_info) + "\n\n"
-        "*Расписание напоминаний:*\n" + "\n".join(lines) + "\n\n"
-        "*Изменить расписание:*\n"
-        "`/set_times 2 09:00 20:00`\n"
-        "`/set_times 0 09:00 13:00 17:00 20:00`"
+    love = cfg.get("love", {})
+    love_status = (
+        f"✅ Включены — с {love.get('start_date', '?')}, в {love.get('send_time', '?')}"
+        if love.get("enabled") else "❌ Выключены"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(
+        "⚙️ *Настройки*\n\n"
+        "*Расписание счётчиков:*\n" + "\n".join(lines) + "\n\n"
+        f"*Любовные сообщения:* {love_status}\n\n"
+        "`/set_times 2 09:00 20:00` — изменить расписание\n"
+        "`/love` — настроить сообщения",
+        parse_mode="Markdown"
+    )
 
 async def cmd_set_times(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -453,16 +556,12 @@ async def cmd_set_times(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             h, m = map(int, t.split(":"))
             assert 0 <= h <= 23 and 0 <= m <= 59
     except Exception:
-        await update.message.reply_text(
-            "❌ Использование: `/set_times 2 09:00 20:00`", parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Использование: `/set_times 2 09:00 20:00`", parse_mode="Markdown")
         return
     cfg.setdefault("default_schedule", {})[str(days_before)] = times
     save_config(cfg)
     rebuild_schedule(ctx.application)
-    await update.message.reply_text(
-        f"✅ За *{days_before}* дн.: {', '.join(times)}", parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"✅ За *{days_before}* дн.: {', '.join(times)}", parse_mode="Markdown")
 
 # ─────────────────────────────────────────────
 #  /sister
@@ -470,57 +569,42 @@ async def cmd_set_times(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_sister(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
-
     sister_id = cfg["sister"].get("chat_id", 0)
     if not sister_id:
         await update.message.reply_text(
-            "❌ chat\\_id сестры не задан.\n\n"
-            "Попроси её написать `/start` боту — он покажет её id.\n"
-            "Добавь `SISTER_ID=<id>` в переменные Railway.",
+            "❌ chat\\_id сестры не задан.\n\nПопроси её написать `/start` боту.",
             parse_mode="Markdown"
         )
         return
-
-    # Только счётчики у которых дедлайн в ближайшие 5 дней или просрочен
     due = get_due_soon(days_threshold=5)
     if not due:
-        # Проверим есть ли вообще незакрытые
         all_pending = {k: c for k, c in cfg["counters"].items() if not c["done"]}
         if not all_pending:
             await update.message.reply_text("✅ Все показания уже отправлены!")
         else:
             names_later = ", ".join(c["name"] for c in all_pending.values())
             await update.message.reply_text(
-                f"⏳ Ещё рано — до дедлайна больше 5 дней.\n\n"
-                f"Счётчики: *{names_later}*\n\n"
-                f"Хочешь написать сестре прямо сейчас?",
+                f"⏳ До дедлайна ещё больше 5 дней.\n\n"
+                f"Счётчики: *{names_later}*\n\nВсё равно написать сестре?",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("📨 Написать всё равно", callback_data="sister_force_all")
                 ]])
             )
         return
-
     names = ", ".join(c["name"] for c in due.values())
-    try:
-        await notify_sister(ctx.bot, list(due.keys()))
-        await update.message.reply_text(f"✅ Написал сестре насчёт: *{names}*", parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+    await notify_sister(ctx.bot, list(due.keys()))
+    await update.message.reply_text(f"✅ Написал сестре насчёт: *{names}*", parse_mode="Markdown")
 
 # ─────────────────────────────────────────────
-#  Фото от сестры → пересылка владельцу
+#  Фото от сестры
 # ─────────────────────────────────────────────
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     sister_id = cfg["sister"].get("chat_id", 0)
-
-    # Фото от сестры
     if uid == sister_id and uid != OWNER_ID:
-        caption = update.message.caption or ""
         sender_name = update.effective_user.first_name
-
-        # Пересылаем все фото владельцу
+        caption = update.message.caption or ""
         await ctx.bot.send_message(
             chat_id=OWNER_ID,
             text=f"📸 *Фото от сестры ({sender_name}):*\n{caption}",
@@ -532,26 +616,124 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             message_id=update.message.message_id
         )
         await update.message.reply_text("✅ Отправила! Спасибо 🙏")
+        buttons = [
+            [InlineKeyboardButton(f"✅ Это {c['name']}", callback_data=f"sister_{k}_done")]
+            for k, c in cfg["counters"].items() if not c["done"]
+        ]
+        if buttons:
+            await ctx.bot.send_message(
+                chat_id=OWNER_ID,
+                text="Отметь какие показания получил:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
 
-        # Показываем кнопки — что это были за показания
-        if cfg["counters"]:
-            buttons = []
-            for key, c in cfg["counters"].items():
-                if not c["done"]:
-                    buttons.append([InlineKeyboardButton(
-                        f"✅ Это {c['name']}",
-                        callback_data=f"sister_{key}_done"
-                    )])
-            if buttons:
-                await ctx.bot.send_message(
-                    chat_id=OWNER_ID,
-                    text="Отметь какие показания получил:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
+# ─────────────────────────────────────────────
+#  Любовные сообщения — команды
+# ─────────────────────────────────────────────
+async def cmd_love(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return ConversationHandler.END
+    love = cfg.get("love", {})
+    if love.get("enabled"):
+        day_num = days_since_start()
+        await update.message.reply_text(
+            f"💛 *Любовные сообщения включены*\n\n"
+            f"├ Начало: {love.get('start_date')}\n"
+            f"├ Сегодня: день *{day_num}*\n"
+            f"└ Время отправки: {love.get('send_time')}\n\n"
+            f"Чтобы изменить время: введи новое в формате `ЧЧ:ММ`\n"
+            f"Или /love\\_off чтобы выключить\n"
+            f"Или /love\\_test — тест прямо сейчас",
+            parse_mode="Markdown"
+        )
+        return WAITING_LOVE_TIME
+    else:
+        await update.message.reply_text(
+            "💛 *Настройка ежедневных сообщений*\n\n"
+            "Введи дату начала отношений в формате `ДД.ММ.ГГГГ`\n"
+            "Например: `14.02.2024`",
+            parse_mode="Markdown"
+        )
+        return WAITING_LOVE_DATE
 
-    elif uid == OWNER_ID:
-        # Фото от владельца — просто игнорируем или можно добавить обработку
-        pass
+async def love_get_date(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        d = datetime.strptime(text, "%d.%m.%Y").date()
+        assert d <= date.today()
+    except (ValueError, AssertionError):
+        await update.message.reply_text(
+            "❌ Неверный формат или дата в будущем.\nВведи: `ДД.ММ.ГГГГ`",
+            parse_mode="Markdown"
+        )
+        return WAITING_LOVE_DATE
+    ctx.user_data["love_start_date"] = d.isoformat()
+    days = (date.today() - d).days + 1
+    await update.message.reply_text(
+        f"✅ Дата: *{d.strftime('%d.%m.%Y')}* — это уже *{days}* день!\n\n"
+        f"Теперь введи время отправки в формате `ЧЧ:ММ`\nНапример: `09:00`",
+        parse_mode="Markdown"
+    )
+    return WAITING_LOVE_TIME
+
+async def love_get_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        h, m = map(int, text.split(":"))
+        assert 0 <= h <= 23 and 0 <= m <= 59
+        time_str = f"{h:02d}:{m:02d}"
+    except (ValueError, AssertionError):
+        await update.message.reply_text("❌ Формат: `ЧЧ:ММ`, например `09:00`", parse_mode="Markdown")
+        return WAITING_LOVE_TIME
+
+    # Если уже включено — только обновляем время
+    if cfg["love"].get("enabled") and not ctx.user_data.get("love_start_date"):
+        cfg["love"]["send_time"] = time_str
+        save_config(cfg)
+        rebuild_schedule(ctx.application)
+        await update.message.reply_text(f"✅ Время обновлено: *{time_str}*", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    start_date = ctx.user_data.get("love_start_date")
+    if not start_date:
+        await update.message.reply_text("❌ Ошибка. Начни заново: /love")
+        return ConversationHandler.END
+
+    cfg["love"]["enabled"] = True
+    cfg["love"]["start_date"] = start_date
+    cfg["love"]["send_time"] = time_str
+    cfg["love"]["msg_index"] = 0
+    save_config(cfg)
+    rebuild_schedule(ctx.application)
+
+    days = (date.today() - date.fromisoformat(start_date)).days + 1
+    await update.message.reply_text(
+        f"✅ *Включено!*\n\n"
+        f"├ Начало: {datetime.fromisoformat(start_date).strftime('%d.%m.%Y')}\n"
+        f"├ Сейчас: день *{days}*\n"
+        f"└ Каждый день в *{time_str}* — новое сообщение 💛\n\n"
+        f"/love\\_test — отправить тест прямо сейчас",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+async def cmd_love_off(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    cfg["love"]["enabled"] = False
+    save_config(cfg)
+    rebuild_schedule(ctx.application)
+    await update.message.reply_text("❌ Ежедневные сообщения выключены.")
+
+async def cmd_love_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    day_num = days_since_start() or 1
+    text = await generate_love_message(day_num, ctx.bot)
+    buttons = [[InlineKeyboardButton("📋 Скопировать текст", callback_data=f"copy_love_{day_num}")]]
+    cfg["love"]["last_text"] = text
+    save_config(cfg)
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
 # ─────────────────────────────────────────────
 #  Callback handler
@@ -562,7 +744,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data = query.data
     uid = update.effective_user.id
 
-    # ── Отметить выполненным (владелец) ──
     if data.startswith("done_") and uid == OWNER_ID:
         key = data[5:]
         if key in cfg["counters"]:
@@ -570,26 +751,20 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             name = cfg["counters"][key]["name"]
             await query.edit_message_text(
                 f"✅ *{name}* — отмечен!\n\n" + status_text(),
-                parse_mode="Markdown",
-                reply_markup=main_keyboard()
+                parse_mode="Markdown", reply_markup=main_keyboard()
             )
 
-    # ── Статус ──
     elif data == "status" and uid == OWNER_ID:
-        await query.edit_message_text(
-            status_text(), parse_mode="Markdown", reply_markup=main_keyboard()
-        )
+        await query.edit_message_text(status_text(), parse_mode="Markdown", reply_markup=main_keyboard())
 
-    # ── Сестра отметила что прислала (кнопка у владельца) ──
     elif data.startswith("sister_") and data.endswith("_done") and uid == OWNER_ID:
         parts = data.split("_")
         key = parts[1]
         if key in cfg["counters"]:
             mark_done(key)
             name = cfg["counters"][key]["name"]
-            await query.edit_message_text(f"✅ *{name}* — отмечен как получен!", parse_mode="Markdown")
+            await query.edit_message_text(f"✅ *{name}* — получен!", parse_mode="Markdown")
 
-    # ── Удалить счётчик ──
     elif data.startswith("del_") and uid == OWNER_ID:
         key = data[4:]
         if key in cfg["counters"]:
@@ -599,30 +774,24 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             rebuild_schedule(ctx.application)
             await query.edit_message_text(f"🗑 *{name}* удалён.", parse_mode="Markdown")
 
-    # ── Выбор счётчика для изменения дедлайна ──
     elif data.startswith("setd_") and uid == OWNER_ID:
         key = data[5:]
         if key in cfg["counters"]:
             ctx.user_data["deadline_key"] = key
             name = cfg["counters"][key]["name"]
             await query.edit_message_text(
-                f"📅 *{name}*\n\nВведи новый дедлайн (число месяца, 1–28):",
-                parse_mode="Markdown"
+                f"📅 *{name}*\n\nВведи новый дедлайн (1–28):", parse_mode="Markdown"
             )
 
-    # ── Кнопка «напомнить сестре» из напоминания (только этот счётчик) ──
     elif data.startswith("ping_sister_") and uid == OWNER_ID:
         key = data[len("ping_sister_"):]
         if key in cfg["counters"]:
             await notify_sister(ctx.bot, [key])
             name = cfg["counters"][key]["name"]
-            await query.answer(f"📨 Написал сестре про {name}!", show_alert=False)
-            # Убираем кнопку после нажатия чтобы не спамить
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton(f"✅ {name} — отправил", callback_data=f"done_{key}"),
             ]]))
 
-    # ── Написать сестре насчёт всех (даже если рано) ──
     elif data == "sister_force_all" and uid == OWNER_ID:
         all_pending = [k for k, c in cfg["counters"].items() if not c["done"]]
         if all_pending:
@@ -632,21 +801,24 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("✅ Все показания уже отправлены!")
 
-    # ── Отмена ──
+    elif data.startswith("copy_love_") and uid == OWNER_ID:
+        # Показываем текст в alert — удобно выделить и скопировать
+        last_text = cfg.get("love", {}).get("last_text", "")
+        # Убираем markdown разметку для чистого текста
+        clean = re.sub(r"[*_`]", "", last_text)
+        await query.answer(clean[:200], show_alert=True)
+
     elif data == "cancel":
         await query.edit_message_text("❌ Отменено.")
 
 # ─────────────────────────────────────────────
-#  Post init
+#  Post init & Main
 # ─────────────────────────────────────────────
 async def post_init(app: Application):
     rebuild_schedule(app)
     scheduler.start()
     logger.info("Bot started.")
 
-# ─────────────────────────────────────────────
-#  Main
-# ─────────────────────────────────────────────
 def main():
     app = (
         Application.builder()
@@ -655,7 +827,6 @@ def main():
         .build()
     )
 
-    # ConversationHandler для /add
     add_conv = ConversationHandler(
         entry_points=[CommandHandler("add", cmd_add)],
         states={
@@ -664,8 +835,6 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
-
-    # ConversationHandler для /deadline (ввод нового числа)
     deadline_conv = ConversationHandler(
         entry_points=[CommandHandler("deadline", cmd_deadline)],
         states={
@@ -673,16 +842,27 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", add_cancel)],
     )
+    love_conv = ConversationHandler(
+        entry_points=[CommandHandler("love", cmd_love)],
+        states={
+            WAITING_LOVE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, love_get_date)],
+            WAITING_LOVE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, love_get_time)],
+        },
+        fallbacks=[CommandHandler("cancel", add_cancel)],
+    )
 
     app.add_handler(add_conv)
     app.add_handler(deadline_conv)
-    app.add_handler(CommandHandler("start",     cmd_start))
-    app.add_handler(CommandHandler("status",    cmd_status))
-    app.add_handler(CommandHandler("remind",    cmd_remind))
-    app.add_handler(CommandHandler("delete",    cmd_delete))
-    app.add_handler(CommandHandler("settings",  cmd_settings))
-    app.add_handler(CommandHandler("set_times", cmd_set_times))
-    app.add_handler(CommandHandler("sister",    cmd_sister))
+    app.add_handler(love_conv)
+    app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("status",     cmd_status))
+    app.add_handler(CommandHandler("remind",     cmd_remind))
+    app.add_handler(CommandHandler("delete",     cmd_delete))
+    app.add_handler(CommandHandler("settings",   cmd_settings))
+    app.add_handler(CommandHandler("set_times",  cmd_set_times))
+    app.add_handler(CommandHandler("sister",     cmd_sister))
+    app.add_handler(CommandHandler("love_off",   cmd_love_off))
+    app.add_handler(CommandHandler("love_test",  cmd_love_test))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
