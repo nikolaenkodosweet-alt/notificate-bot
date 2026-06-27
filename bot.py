@@ -247,16 +247,16 @@ async def generate_love_message(day_num: int, bot) -> str:
                                 "role": "system",
                                 "content": (
                                     "Ты пишешь короткие тёплые сообщения от брата сестре. "
-                                    "Тон — братская любовь: тепло, поддержка, гордость, немного юмора. "
+                                    "Тон — братская любовь: тепло, поддержка, много немного черного юмора. "
                                     "Никакой романтики. Только сам текст — без кавычек и пояснений. "
-                                    "3-5 предложений. Добавляй эмодзи."
+                                    "2-3 предложений. Добавляй эмодзи."
                                 )
                             },
                             {
                                 "role": "user",
                                 "content": (
                                     f"Напиши тёплое сообщение сестре на русском языке. "
-                                    f"Скажи ей что она красавица и умница, поддержи её. "
+                                    f"Скажи ей что она красавица и умница. "
                                     f"Упомяни что сегодня {day_num}-й день — обыграй это число творчески."
                                 )
                             }
@@ -338,7 +338,7 @@ async def send_reminder(app: Application, counter_key: str):
         await notify_sister(app.bot, [counter_key])
 
 async def send_daily_love(app: Application):
-    """Ежедневное романтическое сообщение."""
+    """Ежедневное сообщение сестре (сразу для копирования)."""
     love = cfg.get("love", {})
     if not love.get("enabled") or not love.get("start_date"):
         return
@@ -348,20 +348,36 @@ async def send_daily_love(app: Application):
         return
 
     text = await generate_love_message(day_num, app.bot)
+    
+    # Очищаем от спецсимволов HTML на всякий случай
+    clean_text = re.sub(r"[<>&]", "", text)
 
-    # Кнопка «скопировать» — показывает текст в alert, чтобы удобно выделить
-    buttons = [[InlineKeyboardButton("📋 Скопировать текст", callback_data=f"copy_love_{day_num}")]]
-
+    # Отправляем текст без кнопок внутри тега <code>
     await app.bot.send_message(
         chat_id=OWNER_ID,
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        text=f"<code>{clean_text}</code>",
+        parse_mode="HTML"
     )
 
-    # Сохраняем текст для кнопки копирования
     cfg["love"]["last_text"] = text
     save_config(cfg)
+
+
+async def cmd_love_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        return
+    
+    day_num = days_since_start() or 1
+    text = await generate_love_message(day_num, ctx.bot)
+    clean_text = re.sub(r"[<>&]", "", text)
+    
+    cfg["love"]["last_text"] = text
+    save_config(cfg)
+    
+    await update.message.reply_text(
+        f"<code>{clean_text}</code>", 
+        parse_mode="HTML"
+    )
 
 def rebuild_schedule(app: Application):
     for job in scheduler.get_jobs():
