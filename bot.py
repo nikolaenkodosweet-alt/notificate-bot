@@ -206,6 +206,20 @@ def get_due_soon(days_threshold: int = 5) -> dict:
 # ─────────────────────────────────────────────
 #  Helpers — любовные сообщения
 # ─────────────────────────────────────────────
+def days_since_start() -> int | None:
+    start = cfg["love"].get("start_date")
+    if not start:
+        return None
+    try:
+        d0 = date.fromisoformat(start)
+        return (date.today() - d0).days + 1
+    except ValueError:
+        return None
+
+def today_holiday() -> tuple[str, str] | None:
+    key = datetime.now(TZ).strftime("%m-%d")
+    return HOLIDAYS.get(key)
+
 async def generate_love_message(day_num: int, bot) -> str:
     """Генерирует сообщение через Groq API или берёт из пула."""
     holiday = today_holiday()
@@ -213,15 +227,15 @@ async def generate_love_message(day_num: int, bot) -> str:
         title, body = holiday
         return f"{title}\n\nЭто уже *{day_num}* день вместе 🥰\n\n{body}"
 
-    # Обновленный промпт по твоим новым правилам
+    # Обновленный промпт с дерзким чёрным юмором
     system_prompt = (
-        "Ты — старший брат. Пиши сестре короткие дерзкие сообщения с чёрным юмором. "
+        "Ты — старший брат. Пиши сестре короткие дерзкие сообщения с чёрным юмором.\n"
         "Требования:\n"
         "- Максимум 3 предложения.\n"
-        "- Обязательно ярко обыгрывай номер дня (сегодня уже N-й день) в начале.\n"
+        "- Обязательно ярко обыгрывай номер дня в начале.\n"
         "- Чёрный юмор: про терпение, убийство, выживание, безумие.\n"
         "- Эмодзи должны быть разбросаны по тексту, а не только в конце.\n"
-        "- Никакой лишней сладости.\n"
+        "- Никакой лишней мотивации и сладости.\n"
         "- Разговорный стиль, сарказм, подколы.\n"
         "- Только чистый текст сообщения."
     )
@@ -251,13 +265,13 @@ async def generate_love_message(day_num: int, bot) -> str:
         data = resp.json()
         text = data["choices"][0]["message"]["content"].strip()
         
-        if text and len(text) > 10:
+        if text and len(text) > 20:  # минимальная защита от пустого ответа
             return text
 
     except Exception as e:
         logger.warning(f"Groq API error: {e}")
 
-    # Fallback на случай ошибки API
+    # Fallback — пул сообщений
     idx = cfg["love"]["msg_index"] % len(DAILY_MESSAGES_POOL)
     msg = DAILY_MESSAGES_POOL[idx]
     cfg["love"]["msg_index"] = idx + 1
