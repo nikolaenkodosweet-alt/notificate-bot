@@ -219,62 +219,63 @@ def today_holiday() -> tuple[str, str] | None:
     key = datetime.now(TZ).strftime("%m-%d")
     return HOLIDAYS.get(key)
 
-async def generate_love_message(day_num: int, bot) -> str:
-    """Генерирует сообщение через Claude API или берёт из пула."""
+async def async def generate_love_message(day_num: int, bot) -> str:
+    """Генерирует сообщение через Groq API или берёт из пула."""
     holiday = today_holiday()
-
-    # Если сегодня праздник — используем праздничное
     if holiday:
         title, body = holiday
         return f"{title}\n\nЭто уже *{day_num}* день вместе 🥰\n\n{body}"
 
-    # Пробуем Groq API
-    if ANTHROPIC_KEY:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {ANTHROPIC_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "max_tokens": 300,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Ты пишешь короткие тёплые сообщения с шутками от брата сестре. "
-                                    "Тон — братская любовь: тепло, поддержка, много черного юмора. "
-                                    "Никакой романтики. Только сам текст — без кавычек и пояснений. "
-                                    "2-3 предложений. Добавляй эмодзи."
-                                )
-                            },
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"Напиши тёплое сообщение сестре на русском языке. "
-                                    f"Скажи ей что она красавица и умница. "
-                                    f"Упомяни что сегодня {day_num}-й день — обыграй это число творчески."
-                                )
-                            }
-                        ]
-                    }
-                )
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
-            if text:
-                return text
-        except Exception as e:
-            logger.warning(f"Groq API error: {e}")
+    # Новый промт для Groq
+    system_prompt = (
+        "Ты — старший брат, который пишет своей младшей сестре тёплые сообщения с чёрным юмором.\n\n"
+        "Стиль:\n"
+        "- Братская любовь, поддержка, дерзкое подтрунивание и чёрный юмор.\n"
+        "- Обязательно ярко и творчески обыгрывай номер дня (сегодня уже N-й день) — это важная часть сообщения.\n"
+        "- Говори, что она красавица и умница, но через братский троллинг и любовь.\n"
+        "- Сообщения должны быть чуть длиннее — 3–4 предложения.\n"
+        "- Живой, разговорный русский.\n"
+        "- Добавляй эмодзи в меру.\n"
+        "- Выдавай ТОЛЬКО текст самого сообщения, без кавычек и пояснений."
+    )
 
-    # Fallback — пул сообщений
+    user_prompt = f"Сегодня {day_num}-й день. Напиши сообщение сестре."
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {ANTHROPIC_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "max_tokens": 500,
+                    "temperature": 0.85,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ]
+                }
+            )
+        
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        
+        if text and len(text) > 20:  # минимальная защита от пустого ответа
+            return text
+
+    except Exception as e:
+        logger.warning(f"Groq API error: {e}")
+
+    # Fallback — пул сообщений (можно оставить как есть)
     idx = cfg["love"]["msg_index"] % len(DAILY_MESSAGES_POOL)
     msg = DAILY_MESSAGES_POOL[idx]
     cfg["love"]["msg_index"] = idx + 1
     save_config(cfg)
+    
     return f"День *{day_num}* 🌟\n\n{msg}"
 
 # ─────────────────────────────────────────────
