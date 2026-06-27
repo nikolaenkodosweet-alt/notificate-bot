@@ -37,6 +37,7 @@ CONFIG_FILE = DATA_DIR / "config.json"
 
 # Жестко задаем часовой пояс для всех расчетов
 TZ = ZoneInfo("Europe/Kiev")
+
 # ─────────────────────────────────────────────
 #  Праздники (MM-DD формат)
 # ─────────────────────────────────────────────
@@ -205,6 +206,20 @@ def get_due_soon(days_threshold: int = 5) -> dict:
 # ─────────────────────────────────────────────
 #  Helpers — любовные сообщения
 # ─────────────────────────────────────────────
+def days_since_start() -> int | None:
+    start = cfg["love"].get("start_date")
+    if not start:
+        return None
+    try:
+        d0 = date.fromisoformat(start)
+        return (date.today() - d0).days + 1
+    except ValueError:
+        return None
+
+def today_holiday() -> tuple[str, str] | None:
+    key = datetime.now(TZ).strftime("%m-%d")
+    return HOLIDAYS.get(key)
+
 async def generate_love_message(day_num: int, bot) -> str:
     """Генерирует сообщение через Groq API или берёт из пула."""
     holiday = today_holiday()
@@ -256,13 +271,14 @@ async def generate_love_message(day_num: int, bot) -> str:
     except Exception as e:
         logger.warning(f"Groq API error: {e}")
 
-    # Fallback — пул сообщений (можно оставить как есть)
+    # Fallback — пул сообщений
     idx = cfg["love"]["msg_index"] % len(DAILY_MESSAGES_POOL)
     msg = DAILY_MESSAGES_POOL[idx]
     cfg["love"]["msg_index"] = idx + 1
     save_config(cfg)
     
     return f"День *{day_num}* 🌟\n\n{msg}"
+
 # ─────────────────────────────────────────────
 #  Scheduler
 # ─────────────────────────────────────────────
