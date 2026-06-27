@@ -428,9 +428,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "└ /sister — написать сестре\n\n"
         "*Сообщения сестре:*\n"
         "├ /love — настройки\n"
-        "├ /love_date — изменить дату отсчёта\n"
-        "├ /love_test — тест сообщения\n"
-        "└ /love_off — выключить\n\n"
+        "├ /love\\_date — изменить дату отсчёта\n"
+        "├ /love\\_test — тест сообщения\n"
+        "└ /love\\_off — выключить\n\n"
         "*Прочее:*\n"
         "└ /settings — расписание напоминаний",
         parse_mode="Markdown"
