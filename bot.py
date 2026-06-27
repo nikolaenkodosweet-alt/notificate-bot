@@ -205,21 +205,7 @@ def get_due_soon(days_threshold: int = 5) -> dict:
 # ─────────────────────────────────────────────
 #  Helpers — любовные сообщения
 # ─────────────────────────────────────────────
-def days_since_start() -> int | None:
-    start = cfg["love"].get("start_date")
-    if not start:
-        return None
-    try:
-        d0 = date.fromisoformat(start)
-        return (date.today() - d0).days + 1
-    except ValueError:
-        return None
-
-def today_holiday() -> tuple[str, str] | None:
-    key = datetime.now(TZ).strftime("%m-%d")
-    return HOLIDAYS.get(key)
-
-async def async def generate_love_message(day_num: int, bot) -> str:
+async def generate_love_message(day_num: int, bot) -> str:
     """Генерирует сообщение через Groq API или берёт из пула."""
     holiday = today_holiday()
     if holiday:
@@ -252,7 +238,7 @@ async def async def generate_love_message(day_num: int, bot) -> str:
                 },
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 500,
+                    "max_tokens": 400,
                     "temperature": 0.85,
                     "messages": [
                         {"role": "system", "content": system_prompt},
@@ -277,7 +263,6 @@ async def async def generate_love_message(day_num: int, bot) -> str:
     save_config(cfg)
     
     return f"День *{day_num}* 🌟\n\n{msg}"
-
 # ─────────────────────────────────────────────
 #  Scheduler
 # ─────────────────────────────────────────────
