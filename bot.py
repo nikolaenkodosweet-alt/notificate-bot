@@ -246,8 +246,8 @@ async def generate_love_message(day_num: int, bot) -> str:
                             {
                                 "role": "system",
                                 "content": (
-                                    "Ты пишешь короткие тёплые сообщения от брата сестре. "
-                                    "Тон — братская любовь: тепло, поддержка, много немного черного юмора. "
+                                    "Ты пишешь короткие тёплые сообщения с шутками от брата сестре. "
+                                    "Тон — братская любовь: тепло, поддержка, много черного юмора. "
                                     "Никакой романтики. Только сам текст — без кавычек и пояснений. "
                                     "2-3 предложений. Добавляй эмодзи."
                                 )
@@ -349,8 +349,8 @@ async def send_daily_love(app: Application):
 
     text = await generate_love_message(day_num, app.bot)
     
-    # Очищаем от спецсимволов HTML на всякий случай
-    clean_text = re.sub(r"[<>&]", "", text)
+    # Очищаем от спецсимволов HTML и звездочек Markdown
+    clean_text = re.sub(r"[<>&*]", "", text)
 
     # Отправляем текст без кнопок внутри тега <code>
     await app.bot.send_message(
@@ -369,7 +369,9 @@ async def cmd_love_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     day_num = days_since_start() or 1
     text = await generate_love_message(day_num, ctx.bot)
-    clean_text = re.sub(r"[<>&]", "", text)
+    
+    # Очищаем от спецсимволов HTML и звездочек Markdown
+    clean_text = re.sub(r"[<>&*]", "", text)
     
     cfg["love"]["last_text"] = text
     save_config(cfg)
@@ -785,12 +787,20 @@ async def cmd_love_off(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_love_test(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
+    
     day_num = days_since_start() or 1
     text = await generate_love_message(day_num, ctx.bot)
-    buttons = [[InlineKeyboardButton("📋 Скопировать текст", callback_data=f"copy_love_{day_num}")]]
+    
+    # Очищаем от спецсимволов HTML и звездочек Markdown
+    clean_text = re.sub(r"[<>&*]", "", text)
+    
     cfg["love"]["last_text"] = text
     save_config(cfg)
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
+    
+    await update.message.reply_text(
+        f"<code>{clean_text}</code>", 
+        parse_mode="HTML"
+    )
 
 # ─────────────────────────────────────────────
 #  Callback handler
@@ -858,17 +868,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("✅ Все показания уже отправлены!")
 
-    elif data.startswith("copy_love_") and uid == OWNER_ID:
-        # Отправляем текст отдельным сообщением с моноширинным шрифтом
-        last_text = cfg.get("love", {}).get("last_text", "")
-        # Убираем старую разметку, чтобы она не сломала моноширинный блок
-        clean = re.sub(r"[*_`]", "", last_text)
-        
-        await ctx.bot.send_message(
-            chat_id=OWNER_ID,
-            text=f"Нажми на текст ниже, чтобы скопировать:\n\n`{clean}`",
-            parse_mode="Markdown"
-        )
     elif data == "cancel":
         await query.edit_message_text("❌ Отменено.")
 
