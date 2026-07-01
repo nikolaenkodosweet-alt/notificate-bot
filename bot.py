@@ -403,7 +403,7 @@ def rebuild_schedule(app: Application):
                 job_id = f"rem_{key}_{days_before}_{t.replace(':','')}"
                 scheduler.add_job(
                     send_reminder,
-                    CronTrigger(day=send_day, hour=hour, minute=minute),
+                    CronTrigger(day=send_day, hour=hour, minute=minute, timezone=TZ),  # ← добавили timezone
                     args=[app, key],
                     id=job_id,
                     replace_existing=True,
@@ -415,7 +415,7 @@ def rebuild_schedule(app: Application):
         h, m = map(int, love["send_time"].split(":"))
         scheduler.add_job(
             send_daily_love,
-            CronTrigger(hour=h, minute=m),
+            CronTrigger(hour=h, minute=m, timezone=TZ),  # ← добавили timezone
             args=[app],
             id="daily_love",
             replace_existing=True,
@@ -424,7 +424,7 @@ def rebuild_schedule(app: Application):
 
     scheduler.add_job(
         reset_if_new_month,
-        CronTrigger(day=1, hour=0, minute=1),
+        CronTrigger(day=1, hour=0, minute=1, timezone=TZ),  # ← добавили timezone
         id="monthly_reset",
         replace_existing=True,
     )
